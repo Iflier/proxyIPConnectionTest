@@ -2,15 +2,20 @@ package main
 
 import (
 	"bufio"
+	"container/list"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net"
 	"os"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-redis/redis"
 )
+
+var lock = new(sync.Mutex)
 
 type ProxyIP struct {
 	HttpType string
@@ -21,7 +26,7 @@ var redisOptions = redis.Options{
 	Network:    "tcp",
 	Addr:       "localhost:6379",
 	DB:         0,
-	Password:   "******",
+	Password:   "123,gslw",
 	MaxRetries: 5,
 }
 
@@ -32,6 +37,7 @@ func testProxyIP(proxyStr string) bool {
 		fmt.Println("Connection test failed !")
 		returnVal = false
 	} else {
+		// 可连通的连接，需要主动关闭。没有创建连接的就不用了
 		conn.Close()
 		fmt.Println("Connection test ok")
 		returnVal = true
@@ -39,8 +45,22 @@ func testProxyIP(proxyStr string) bool {
 	return returnVal
 }
 
-func main() {
+func testAndAddProxyIP(ipList *list.List, cache *redis.Client) {
 	var testResult bool
+	for elem := ipList.Front(); elem != nil; elem = elem.Next() {
+		testResult = testProxyIP(elem.Value.(string))
+		if testResult != true {
+			cache.SRem("HTTP", elem.Value.(string))
+		}
+	}
+}
+
+func main() {
+	var elemList = list.New()
+	var stringSlicePointer *redis.StringSliceCmd
+	var intCmdPointer *redis.IntCmd
+	// http 和 https 类型的代理。也代表着redis中的两种集合
+	var validHttpType = [...]string{"HTTP", "HTTPS"}
 	var structInstance *ProxyIP = new(ProxyIP)
 	var cache = redis.NewClient(&redisOptions)
 	var file, err = os.Open("proxy.json")
@@ -48,18 +68,25 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	// var cmdPoint = cache.SCard("HTTP")
-	// fmt.Println(cmdPoint.Val())
+
 	var fileReader = bufio.NewReader(file)
 	for {
 		if content, err := fileReader.ReadBytes('\n'); err == nil {
 			json.Unmarshal(content, structInstance)
-			testResult = testProxyIP(structInstance.Ip)
-			if testResult {
-				cache.SAdd(structInstance.HttpType, structInstance.Ip)
-			}
+			cache.SAdd(strings.ToUpper(structInstance.HttpType), structInstance.Ip)
 		} else {
 			break
 		}
 	}
+	for _, httpType := range validHttpType {
+		intCmdPointer = cache.SCard(httpType)
+		// 仅当集合元素个数大于 0 时
+		if intCmdPointer.Val() > 0 {
+			stringSlicePointer = cache.SMembers(httpType)
+			for _, value := range stringSlicePointer.Val() {
+				elemList.PushBack(value)
+			}
+		}
+	}
+	testAndAddProxyIP(elemList, cache)
 }
