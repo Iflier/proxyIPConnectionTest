@@ -15,8 +15,6 @@ import (
 	"github.com/go-redis/redis"
 )
 
-var lock = new(sync.Mutex)
-
 type ProxyIP struct {
 	HttpType string
 	Ip       string
@@ -30,7 +28,7 @@ var redisOptions = redis.Options{
 	MaxRetries: 5,
 }
 
-func testProxyIP(proxyStr string) bool {
+func testAvailableProxyIP(proxyStr string) bool {
 	var returnVal bool = false
 	var conn, err = net.DialTimeout("tcp4", proxyStr, time.Second*time.Duration(60))
 	if err != nil {
@@ -45,18 +43,36 @@ func testProxyIP(proxyStr string) bool {
 	return returnVal
 }
 
-func testAndAddProxyIP(ipList *list.List, cache *redis.Client) {
+func addProxyIP(done chan bool, ipList *list.List, lock *sync.Mutex, cache *redis.Client) {
 	var testResult bool
-	for elem := ipList.Front(); elem != nil; elem = elem.Next() {
-		testResult = testProxyIP(elem.Value.(string))
-		if testResult != true {
-			cache.SRem("HTTP", elem.Value.(string))
+	var elem, next *list.Element
+	lock.Lock()
+	elem = ipList.Front()
+	lock.Unlock()
+	for {
+		if elem != nil {
+			testResult = testAvailableProxyIP(elem.Value.(string))
+			if testResult != true {
+				cache.SRem("HTTP", elem.Value.(string))
+				fmt.Printf("Remove element: %v\n", elem.Value.(string))
+			}
+		} else {
+			break
 		}
+		lock.Lock()
+		next = elem.Next()
+		ipList.Remove(elem)
+		lock.Unlock()
+		elem = next
 	}
+	fmt.Printf("List length = %v\n", ipList.Len())
+	done <- true
 }
 
 func main() {
 	var elemList = list.New()
+	var doneSignal = make(chan bool)
+	var mutexLock = new(sync.Mutex)
 	var stringSlicePointer *redis.StringSliceCmd
 	var intCmdPointer *redis.IntCmd
 	// http 和 https 类型的代理。也代表着redis中的两种集合
@@ -82,11 +98,19 @@ func main() {
 		intCmdPointer = cache.SCard(httpType)
 		// 仅当集合元素个数大于 0 时
 		if intCmdPointer.Val() > 0 {
+			fmt.Printf("%v elements in %v\n", intCmdPointer.Val(), httpType)
 			stringSlicePointer = cache.SMembers(httpType)
 			for _, value := range stringSlicePointer.Val() {
 				elemList.PushBack(value)
 			}
 		}
 	}
-	testAndAddProxyIP(elemList, cache)
+	for i := 0; i < 10; i++ {
+		fmt.Printf("i = %v\n", i)
+		go addProxyIP(doneSignal, elemList, mutexLock, cache)
+	}
+	for i := 0; i < 10; i++ {
+		<-doneSignal
+	}
+	fmt.Println("Done.")
 }
