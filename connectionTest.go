@@ -9,7 +9,6 @@ import (
 	"net"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/go-redis/redis"
@@ -24,8 +23,25 @@ var redisOptions = redis.Options{
 	Network:    "tcp",
 	Addr:       "localhost:6379",
 	DB:         0,
-	Password:   "123,gslw",
+	Password:   "******",
 	MaxRetries: 5,
+}
+
+func genListElem(doneChan chan bool, ch chan string, ipList *list.List) {
+	// 通过 chan 向各个 go routines 传递列表元素
+	var next *list.Element
+	if ipList.Len() > 0 {
+		for elem := ipList.Front(); elem != nil; elem = next {
+			ch <- elem.Value.(string)
+			next = elem.Next()
+			ipList.Remove(elem)
+		}
+	}
+	for i := 0; i < 10; i++ {
+		ch <- ""
+		time.Sleep(50 * time.Millisecond)
+	}
+	doneChan <- true
 }
 
 func testAvailableProxyIP(proxyStr string) bool {
@@ -43,36 +59,27 @@ func testAvailableProxyIP(proxyStr string) bool {
 	return returnVal
 }
 
-func addProxyIP(done chan bool, ipList *list.List, lock *sync.Mutex, cache *redis.Client) {
+func addProxyIP(done chan bool, elemChan chan string, cache *redis.Client) {
 	var testResult bool
-	var elem, next *list.Element
-	lock.Lock()
-	elem = ipList.Front()
-	lock.Unlock()
-	for {
-		if elem != nil {
-			testResult = testAvailableProxyIP(elem.Value.(string))
+	for testIP := range elemChan {
+		if testIP != "" {
+			testResult = testAvailableProxyIP(testIP)
 			if testResult != true {
-				cache.SRem("HTTP", elem.Value.(string))
-				fmt.Printf("Remove element: %v\n", elem.Value.(string))
+				cache.SRem("HTTP", testIP)
+				fmt.Printf("Remove element: %v\n", testIP)
 			}
 		} else {
 			break
 		}
-		lock.Lock()
-		next = elem.Next()
-		ipList.Remove(elem)
-		lock.Unlock()
-		elem = next
 	}
-	fmt.Printf("List length = %v\n", ipList.Len())
+	// main函数可以退出了
 	done <- true
 }
 
 func main() {
 	var elemList = list.New()
 	var doneSignal = make(chan bool)
-	var mutexLock = new(sync.Mutex)
+	var elemChan = make(chan string)
 	var stringSlicePointer *redis.StringSliceCmd
 	var intCmdPointer *redis.IntCmd
 	// http 和 https 类型的代理。也代表着redis中的两种集合
@@ -105,11 +112,12 @@ func main() {
 			}
 		}
 	}
+	go genListElem(doneSignal, elemChan, elemList)
 	for i := 0; i < 10; i++ {
 		fmt.Printf("i = %v\n", i)
-		go addProxyIP(doneSignal, elemList, mutexLock, cache)
+		go addProxyIP(doneSignal, elemChan, cache)
 	}
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 11; i++ {
 		<-doneSignal
 	}
 	fmt.Println("Done.")
