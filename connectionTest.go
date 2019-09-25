@@ -24,7 +24,7 @@ var redisOptions = redis.Options{
 	Network:    "tcp",
 	Addr:       "localhost:6379",
 	DB:         0,
-	Password:   "123,gslw",
+	Password:   "******",
 	MaxRetries: 5,
 }
 
