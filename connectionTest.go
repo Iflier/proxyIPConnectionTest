@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-redis/redis"
@@ -23,13 +24,14 @@ var redisOptions = redis.Options{
 	Network:    "tcp",
 	Addr:       "localhost:6379",
 	DB:         0,
-	Password:   "******",
+	Password:   "123,gslw",
 	MaxRetries: 5,
 }
 
-func genListElem(doneChan chan bool, ch chan string, ipList *list.List) {
+func genListElem(ch chan string, wg *sync.WaitGroup, ipList *list.List) {
 	// 通过 chan 向各个 go routines 传递列表元素
 	var next *list.Element
+	wg.Add(1)
 	if ipList.Len() > 0 {
 		for elem := ipList.Front(); elem != nil; elem = next {
 			ch <- elem.Value.(string)
@@ -39,9 +41,9 @@ func genListElem(doneChan chan bool, ch chan string, ipList *list.List) {
 	}
 	for i := 0; i < 10; i++ {
 		ch <- ""
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
 	}
-	doneChan <- true
+	wg.Done()
 }
 
 func testAvailableProxyIP(proxyStr string) bool {
@@ -59,7 +61,7 @@ func testAvailableProxyIP(proxyStr string) bool {
 	return returnVal
 }
 
-func addProxyIP(done chan bool, elemChan chan string, cache *redis.Client) {
+func addProxyIP(elemChan chan string, wg *sync.WaitGroup, cache *redis.Client) {
 	var testResult bool
 	for testIP := range elemChan {
 		if testIP != "" {
@@ -73,13 +75,13 @@ func addProxyIP(done chan bool, elemChan chan string, cache *redis.Client) {
 		}
 	}
 	// main函数可以退出了
-	done <- true
+	wg.Done()
 }
 
 func main() {
 	var elemList = list.New()
-	var doneSignal = make(chan bool)
 	var elemChan = make(chan string)
+	var waitGroup = new(sync.WaitGroup)
 	var stringSlicePointer *redis.StringSliceCmd
 	var intCmdPointer *redis.IntCmd
 	// http 和 https 类型的代理。也代表着redis中的两种集合
@@ -112,13 +114,13 @@ func main() {
 			}
 		}
 	}
-	go genListElem(doneSignal, elemChan, elemList)
+	go genListElem(elemChan, waitGroup, elemList)
 	for i := 0; i < 10; i++ {
 		fmt.Printf("i = %v\n", i)
-		go addProxyIP(doneSignal, elemChan, cache)
+		waitGroup.Add(1)
+		go addProxyIP(elemChan, waitGroup, cache)
 	}
-	for i := 0; i < 11; i++ {
-		<-doneSignal
-	}
+	// 等待所有的go routines完成
+	waitGroup.Wait()
 	fmt.Println("Done.")
 }

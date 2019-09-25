@@ -6,4 +6,5 @@
 ## Update on 2019.09.23
 进一步完善`Go`语言版本的代理ip连通性测试，支持`http`和`https`类型的代理
 ## Update on 2019.09.25
-本次更新引入 `Go routine`，用于快速测试代理`ip`。唯一的遗憾是，如果能够有`Python`语言一样用于抓取的第三方包就好了。
+1、本次更新引入 `Go routine`，用于快速测试代理`ip`。唯一的遗憾是，如果能够有`Python`语言一样用于抓取的第三方包就好了。
+2、使用`WaitGroup`代替`channel`阻塞`main`
